@@ -1,54 +1,93 @@
 import AVFoundation
 
 class AudioRecorder {
-    private let engine = AVAudioEngine()
+    private var engine = AVAudioEngine()
     private var samples: [Float] = []
     private let targetSampleRate: Double = 16000
     private var isRecording = false
+    private var converter: AVAudioConverter?
+    private var targetFormat: AVAudioFormat?
 
-    func startRecording() {
-        guard !isRecording else { return }
+    enum StartError: Error {
+        case micPermissionDenied
+        case invalidInputFormat
+        case converterUnavailable
+        case engineFailed(Error)
+    }
+
+    func requestMicPermission(_ completion: @escaping (Bool) -> Void) {
+        switch AVCaptureDevice.authorizationStatus(for: .audio) {
+        case .authorized:
+            completion(true)
+        case .notDetermined:
+            AVCaptureDevice.requestAccess(for: .audio) { granted in
+                DispatchQueue.main.async { completion(granted) }
+            }
+        default:
+            completion(false)
+        }
+    }
+
+    @discardableResult
+    func startRecording() -> StartError? {
+        guard !isRecording else { return nil }
+
+        guard AVCaptureDevice.authorizationStatus(for: .audio) == .authorized else {
+            return .micPermissionDenied
+        }
 
         samples.removeAll()
+        converter = nil
 
+        // Fresh engine each recording session — avoids stale HAL state that
+        // can cause installTap to throw an NSException on subsequent runs.
+        engine = AVAudioEngine()
         let inputNode = engine.inputNode
-        let inputFormat = inputNode.outputFormat(forBus: 0)
 
-        guard let targetFormat = AVAudioFormat(
+        guard let target = AVAudioFormat(
             commonFormat: .pcmFormatFloat32,
             sampleRate: targetSampleRate,
             channels: 1,
             interleaved: false
         ) else {
-            print("Failed to create target audio format")
-            return
+            return .invalidInputFormat
         }
+        self.targetFormat = target
 
-        guard let converter = AVAudioConverter(from: inputFormat, to: targetFormat) else {
-            print("Failed to create audio converter")
-            return
-        }
+        let targetSR = self.targetSampleRate
 
+        // Pass nil format so AVAudio uses the bus's native format — the most
+        // reliable form. Build the converter lazily from the first buffer's
+        // actual format.
         let bufferSize: AVAudioFrameCount = 4096
-        inputNode.installTap(onBus: 0, bufferSize: bufferSize, format: inputFormat) { [weak self] buffer, _ in
-            guard let self = self else { return }
+        inputNode.installTap(onBus: 0, bufferSize: bufferSize, format: nil) { [weak self] buffer, _ in
+            guard let self = self, let target = self.targetFormat else { return }
 
-            let ratio = targetSampleRate / inputFormat.sampleRate
+            if self.converter == nil {
+                self.converter = AVAudioConverter(from: buffer.format, to: target)
+            }
+            guard let converter = self.converter else { return }
+
+            let ratio = targetSR / buffer.format.sampleRate
             let outputFrameCount = AVAudioFrameCount(Double(buffer.frameLength) * ratio)
-            guard let outputBuffer = AVAudioPCMBuffer(pcmFormat: targetFormat, frameCapacity: outputFrameCount) else {
+            guard outputFrameCount > 0,
+                  let outputBuffer = AVAudioPCMBuffer(pcmFormat: target, frameCapacity: outputFrameCount) else {
                 return
             }
 
             var error: NSError?
+            var delivered = false
             converter.convert(to: outputBuffer, error: &error) { _, outStatus in
+                if delivered {
+                    outStatus.pointee = .noDataNow
+                    return nil
+                }
+                delivered = true
                 outStatus.pointee = .haveData
                 return buffer
             }
 
-            if let err = error {
-                print("Conversion error: \(err)")
-                return
-            }
+            if error != nil { return }
 
             if let channelData = outputBuffer.floatChannelData {
                 let frameCount = Int(outputBuffer.frameLength)
@@ -58,10 +97,13 @@ class AudioRecorder {
         }
 
         do {
+            engine.prepare()
             try engine.start()
             isRecording = true
+            return nil
         } catch {
-            print("Failed to start audio engine: \(error)")
+            inputNode.removeTap(onBus: 0)
+            return .engineFailed(error)
         }
     }
 

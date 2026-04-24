@@ -16,6 +16,12 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         audioRecorder = AudioRecorder()
         transcriber = GroqTranscriber()
 
+        audioRecorder.requestMicPermission { [weak self] granted in
+            if !granted {
+                self?.statusBar.updateStatus("Mic permission denied — enable in System Settings")
+            }
+        }
+
         keyMonitor = KeyMonitor()
         keyMonitor.onPress = { [weak self] in
             self?.startRecording()
@@ -41,8 +47,21 @@ class AppDelegate: NSObject, NSApplicationDelegate {
             statusBar.updateStatus("Set API key first")
             return
         }
+        if let err = audioRecorder.startRecording() {
+            let msg: String
+            switch err {
+            case .micPermissionDenied: msg = "Mic permission denied — enable in System Settings"
+            case .invalidInputFormat: msg = "No audio input device available"
+            case .converterUnavailable: msg = "Audio converter init failed"
+            case .engineFailed(let e): msg = "Audio engine error: \(e.localizedDescription)"
+            }
+            DispatchQueue.main.async {
+                self.statusBar.setIdle()
+                self.statusBar.updateStatus(msg)
+            }
+            return
+        }
         isRecording = true
-        audioRecorder.startRecording()
         DispatchQueue.main.async {
             self.statusBar.setRecording()
         }
