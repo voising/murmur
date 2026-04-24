@@ -4,4 +4,4 @@ set -euo pipefail
 cd "$(dirname "$0")/.."
 
 ./scripts/build.sh
-open .build/MyWhisper.app
+open .build/Murmur.app

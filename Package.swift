@@ -2,12 +2,12 @@
 import PackageDescription
 
 let package = Package(
-    name: "MyWhisper",
+    name: "Murmur",
     platforms: [.macOS(.v13)],
     targets: [
         .executableTarget(
-            name: "MyWhisper",
-            path: "Sources/MyWhisper",
+            name: "Murmur",
+            path: "Sources/Murmur",
             linkerSettings: [
                 .linkedFramework("AppKit"),
                 .linkedFramework("AVFoundation"),

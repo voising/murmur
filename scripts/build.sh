@@ -3,10 +3,10 @@ set -euo pipefail
 
 cd "$(dirname "$0")/.."
 
-echo "Building MyWhisper..."
+echo "Building Murmur..."
 swift build -c release
 
-APP_NAME="MyWhisper"
+APP_NAME="Murmur"
 APP_DIR=".build/${APP_NAME}.app"
 CONTENTS_DIR="${APP_DIR}/Contents"
 MACOS_DIR="${CONTENTS_DIR}/MacOS"
@@ -43,15 +43,15 @@ cat > "${CONTENTS_DIR}/Info.plist" << 'PLIST'
 <plist version="1.0">
 <dict>
     <key>CFBundleName</key>
-    <string>MyWhisper</string>
+    <string>Murmur</string>
     <key>CFBundleIdentifier</key>
-    <string>com.local.mywhisper</string>
+    <string>com.railssquad.murmur</string>
     <key>CFBundleVersion</key>
     <string>1.0</string>
     <key>CFBundleShortVersionString</key>
     <string>1.0</string>
     <key>CFBundleExecutable</key>
-    <string>MyWhisper</string>
+    <string>Murmur</string>
     <key>CFBundleIconFile</key>
     <string>AppIcon</string>
     <key>CFBundlePackageType</key>
@@ -61,13 +61,18 @@ cat > "${CONTENTS_DIR}/Info.plist" << 'PLIST'
     <key>LSUIElement</key>
     <true/>
     <key>NSMicrophoneUsageDescription</key>
-    <string>MyWhisper needs microphone access to record your voice for transcription.</string>
+    <string>Murmur needs microphone access to record your voice for transcription.</string>
 </dict>
 </plist>
 PLIST
 
-# Ad-hoc code sign
-codesign --force --sign - "${APP_DIR}"
+# Prefer stable self-signed identity so TCC grants persist across rebuilds.
+# Falls back to ad-hoc if the cert isn't installed — see scripts/setup-signing.sh.
+SIGN_IDENTITY="-"
+if security find-certificate -c "MurmurSign" >/dev/null 2>&1; then
+    SIGN_IDENTITY="MurmurSign"
+fi
+codesign --force --deep --sign "${SIGN_IDENTITY}" "${APP_DIR}"
 
 echo "Built: ${APP_DIR}"
 echo "Run with: open ${APP_DIR}"

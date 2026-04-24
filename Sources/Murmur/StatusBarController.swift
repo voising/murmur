@@ -23,7 +23,7 @@ class StatusBarController {
 
         menu.addItem(NSMenuItem.separator())
 
-        let quitItem = NSMenuItem(title: "Quit MyWhisper", action: #selector(quitClicked), keyEquivalent: "q")
+        let quitItem = NSMenuItem(title: "Quit Murmur", action: #selector(quitClicked), keyEquivalent: "q")
         quitItem.target = self
         menu.addItem(quitItem)
 
@@ -33,8 +33,9 @@ class StatusBarController {
 
     func setIdle() {
         if let button = statusItem.button {
-            button.image = NSImage(systemSymbolName: "mic", accessibilityDescription: "MyWhisper")
+            button.image = NSImage(systemSymbolName: "mic", accessibilityDescription: "Murmur")
             button.image?.isTemplate = true
+            button.contentTintColor = nil
         }
     }
 
