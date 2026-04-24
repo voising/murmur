@@ -66,12 +66,20 @@ cat > "${CONTENTS_DIR}/Info.plist" << 'PLIST'
 </plist>
 PLIST
 
-# Prefer stable self-signed identity so TCC grants persist across rebuilds.
-# Falls back to ad-hoc if the cert isn't installed — see scripts/setup-signing.sh.
-SIGN_IDENTITY="-"
-if security find-certificate -c "MurmurSign" >/dev/null 2>&1; then
-    SIGN_IDENTITY="MurmurSign"
-fi
+# Pick the most stable codesigning identity available so TCC grants persist.
+# Priority: Developer ID > Apple Development > self-signed > ad-hoc.
+pick_identity() {
+    local pattern="$1"
+    security find-identity -v -p codesigning \
+        | sed -nE 's/.*"('"$pattern"'[^"]*)".*/\1/p' \
+        | head -1
+}
+SIGN_IDENTITY=""
+SIGN_IDENTITY=$(pick_identity "Developer ID Application:")
+[ -z "$SIGN_IDENTITY" ] && SIGN_IDENTITY=$(pick_identity "Apple Development:")
+[ -z "$SIGN_IDENTITY" ] && security find-certificate -c "MurmurSign" >/dev/null 2>&1 && SIGN_IDENTITY="MurmurSign"
+[ -z "$SIGN_IDENTITY" ] && SIGN_IDENTITY="-"
+echo "Signing with: ${SIGN_IDENTITY}"
 codesign --force --deep --sign "${SIGN_IDENTITY}" "${APP_DIR}"
 
 echo "Built: ${APP_DIR}"

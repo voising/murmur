@@ -6,36 +6,59 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     private var keyMonitor: KeyMonitor!
     private var audioRecorder: AudioRecorder!
     private var transcriber: GroqTranscriber!
+    private var history = HistoryStore()
     private var isRecording = false
 
+    private let startSound = NSSound(contentsOfFile: "/System/Library/Sounds/Tink.aiff", byReference: true)
+    private let stopSound = NSSound(contentsOfFile: "/System/Library/Sounds/Pop.aiff", byReference: true)
+
+    private static let onboardedKey = "MurmurOnboarded"
+
     func applicationDidFinishLaunching(_ notification: Notification) {
+        startSound?.volume = 0.35
+        stopSound?.volume = 0.35
+
         statusBar = StatusBarController()
         statusBar.onSetAPIKey = { [weak self] in self?.promptForAPIKey() }
+        statusBar.onShowHelp = { [weak self] in self?.showOnboarding(force: true) }
         statusBar.onQuit = { NSApp.terminate(nil) }
+        statusBar.onHistorySelect = { text in
+            let pb = NSPasteboard.general
+            pb.clearContents()
+            pb.setString(text, forType: .string)
+            Toast.show("Copied to clipboard", kind: .success, duration: 1.5)
+        }
+        statusBar.onHistoryClear = { [weak self] in
+            self?.history.clear()
+            self?.statusBar.setHistory([])
+        }
+        statusBar.setHistory(history.items)
 
         audioRecorder = AudioRecorder()
         transcriber = GroqTranscriber()
 
         audioRecorder.requestMicPermission { [weak self] granted in
             if !granted {
-                self?.statusBar.updateStatus("Mic permission denied — enable in System Settings")
+                Toast.show("Microphone access denied — enable in System Settings → Privacy", kind: .error, duration: 5)
+                self?.statusBar.updateStatus("Mic permission denied")
             }
         }
 
         keyMonitor = KeyMonitor()
-        keyMonitor.onPress = { [weak self] in
-            self?.startRecording()
-        }
-        keyMonitor.onRelease = { [weak self] in
-            self?.stopRecordingAndTranscribe()
-        }
+        keyMonitor.onPress = { [weak self] in self?.startRecording() }
+        keyMonitor.onRelease = { [weak self] in self?.stopRecordingAndTranscribe() }
         keyMonitor.onStatusChange = { [weak self] message in
             self?.statusBar.updateStatus(message)
         }
         keyMonitor.start()
 
-        if GroqTranscriber.apiKey == nil {
-            DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) { [weak self] in
+        let firstRun = !UserDefaults.standard.bool(forKey: Self.onboardedKey)
+        if firstRun {
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.4) { [weak self] in
+                self?.showOnboarding(force: false)
+            }
+        } else if GroqTranscriber.apiKey == nil {
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.4) { [weak self] in
                 self?.promptForAPIKey()
             }
         }
@@ -44,26 +67,28 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     private func startRecording() {
         guard !isRecording else { return }
         guard GroqTranscriber.apiKey != nil else {
-            statusBar.updateStatus("Set API key first")
+            Toast.show("Set your Groq API key first", kind: .error)
             return
         }
         if let err = audioRecorder.startRecording() {
             let msg: String
             switch err {
-            case .micPermissionDenied: msg = "Mic permission denied — enable in System Settings"
+            case .micPermissionDenied: msg = "Microphone access denied"
             case .invalidInputFormat: msg = "No audio input device available"
             case .converterUnavailable: msg = "Audio converter init failed"
             case .engineFailed(let e): msg = "Audio engine error: \(e.localizedDescription)"
             }
             DispatchQueue.main.async {
                 self.statusBar.setIdle()
-                self.statusBar.updateStatus(msg)
+                Toast.show(msg, kind: .error)
             }
             return
         }
         isRecording = true
         DispatchQueue.main.async {
+            self.startSound?.play()
             self.statusBar.setRecording()
+            self.statusBar.updateStatus("Recording…")
         }
     }
 
@@ -80,7 +105,9 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         }
 
         DispatchQueue.main.async {
+            self.stopSound?.play()
             self.statusBar.setTranscribing()
+            self.statusBar.updateStatus("Transcribing…")
         }
 
         Task {
@@ -89,23 +116,54 @@ class AppDelegate: NSObject, NSApplicationDelegate {
                 await MainActor.run {
                     if !text.isEmpty {
                         TextPaster.paste(text: text)
-                        self.statusBar.updateStatus("Pasted: \(String(text.prefix(30)))...")
+                        self.history.add(text)
+                        self.statusBar.setHistory(self.history.items)
+                        self.statusBar.updateStatus("Ready — hold right Option")
                     } else {
-                        self.statusBar.updateStatus("No speech detected")
+                        Toast.show("No speech detected", kind: .info)
+                        self.statusBar.updateStatus("Ready")
                     }
                     self.statusBar.setIdle()
                 }
             } catch {
                 await MainActor.run {
-                    self.statusBar.updateStatus("Error: \(error.localizedDescription)")
+                    Toast.show("Transcription failed: \(error.localizedDescription)", kind: .error, duration: 4)
+                    self.statusBar.updateStatus("Ready")
                     self.statusBar.setIdle()
                 }
             }
         }
     }
 
+    private func showOnboarding(force: Bool) {
+        NSApp.activate(ignoringOtherApps: true)
+
+        let alert = NSAlert()
+        alert.messageText = "Welcome to Murmur"
+        alert.informativeText = """
+        Press and hold the right Option (⌥) key to record, release to paste the transcription wherever your cursor is.
+
+        You'll need to grant two permissions the first time:
+          • Microphone — to capture your voice
+          • Accessibility — so the right-Option hotkey works
+
+        A free Groq API key is required (get one at console.groq.com).
+        """
+        alert.alertStyle = .informational
+        alert.addButton(withTitle: "Set API Key")
+        alert.addButton(withTitle: "Later")
+
+        let response = alert.runModal()
+        UserDefaults.standard.set(true, forKey: Self.onboardedKey)
+
+        if response == .alertFirstButtonReturn {
+            promptForAPIKey()
+        } else if !force && GroqTranscriber.apiKey == nil {
+            Toast.show("Add your API key later from the menu", kind: .info)
+        }
+    }
+
     private func promptForAPIKey() {
-        // Activate the app so the alert window can receive keyboard input
         NSApp.activate(ignoringOtherApps: true)
 
         let alert = NSAlert()
@@ -115,14 +173,12 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         alert.addButton(withTitle: "Save")
         alert.addButton(withTitle: "Cancel")
 
-        let input = NSTextField(frame: NSRect(x: 0, y: 0, width: 300, height: 24))
+        let input = NSSecureTextField(frame: NSRect(x: 0, y: 0, width: 300, height: 24))
         input.placeholderString = "gsk_..."
         if let existing = GroqTranscriber.apiKey {
             input.stringValue = existing
         }
         alert.accessoryView = input
-
-        // Make the text field first responder once the alert window is visible
         alert.window.initialFirstResponder = input
 
         let response = alert.runModal()
@@ -130,7 +186,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
             let key = input.stringValue.trimmingCharacters(in: .whitespacesAndNewlines)
             if !key.isEmpty {
                 GroqTranscriber.apiKey = key
-                statusBar.updateStatus("API key saved")
+                Toast.show("API key saved", kind: .success)
             }
         }
     }

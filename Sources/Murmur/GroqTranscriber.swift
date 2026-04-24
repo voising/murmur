@@ -1,12 +1,20 @@
 import Foundation
 
 class GroqTranscriber {
-    private static let apiKeyKey = "GroqAPIKey"
+    private static let apiKeyAccount = "GroqAPIKey"
     private static let endpoint = URL(string: "https://api.groq.com/openai/v1/audio/transcriptions")!
 
     static var apiKey: String? {
-        get { UserDefaults.standard.string(forKey: apiKeyKey) }
-        set { UserDefaults.standard.set(newValue, forKey: apiKeyKey) }
+        get {
+            // One-time migration from UserDefaults to Keychain
+            if let legacy = UserDefaults.standard.string(forKey: apiKeyAccount) {
+                Keychain.set(legacy, account: apiKeyAccount)
+                UserDefaults.standard.removeObject(forKey: apiKeyAccount)
+                return legacy
+            }
+            return Keychain.get(account: apiKeyAccount)
+        }
+        set { Keychain.set(newValue, account: apiKeyAccount) }
     }
 
     func transcribe(wavData: Data) async throws -> String {
