@@ -44,6 +44,15 @@ class AudioRecorder {
         engine = AVAudioEngine()
         let inputNode = engine.inputNode
 
+        if let deviceID = AudioDeviceManager.resolveSelectedDeviceID() {
+            do {
+                try inputNode.auAudioUnit.setDeviceID(deviceID)
+            } catch {
+                // Fall through to system default if the pinned device can't be applied
+                // (e.g. unplugged between menu open and record press).
+            }
+        }
+
         guard let target = AVAudioFormat(
             commonFormat: .pcmFormatFloat32,
             sampleRate: targetSampleRate,

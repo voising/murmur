@@ -4,3 +4,8 @@
 xcuserdata/
 DerivedData/
 .DS_Store
+dist/
+*.dmg
+*.zip
+.env
+website/

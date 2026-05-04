@@ -77,10 +77,6 @@ class KeyMonitor {
 
         let keycode = event.getIntegerValueField(.keyboardEventKeycode)
         let flags = event.flags
-        let rawFlags = event.flags.rawValue
-
-        // Debug: log every flagsChanged event
-        print("[KeyMonitor] keycode=\(keycode) flags=0x\(String(rawFlags, radix: 16))")
 
         // Right Option key = keycode 61
         if keycode == 61 {

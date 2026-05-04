@@ -135,6 +135,8 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         }
     }
 
+    private static let groqKeysURL = URL(string: "https://console.groq.com/keys")!
+
     private func showOnboarding(force: Bool) {
         NSApp.activate(ignoringOtherApps: true)
 
@@ -147,19 +149,26 @@ class AppDelegate: NSObject, NSApplicationDelegate {
           • Microphone — to capture your voice
           • Accessibility — so the right-Option hotkey works
 
-        A free Groq API key is required (get one at console.groq.com).
+        A free Groq API key is required.
         """
         alert.alertStyle = .informational
         alert.addButton(withTitle: "Set API Key")
+        alert.addButton(withTitle: "Get API Key")
         alert.addButton(withTitle: "Later")
 
         let response = alert.runModal()
         UserDefaults.standard.set(true, forKey: Self.onboardedKey)
 
-        if response == .alertFirstButtonReturn {
+        switch response {
+        case .alertFirstButtonReturn:
             promptForAPIKey()
-        } else if !force && GroqTranscriber.apiKey == nil {
-            Toast.show("Add your API key later from the menu", kind: .info)
+        case .alertSecondButtonReturn:
+            NSWorkspace.shared.open(Self.groqKeysURL)
+            promptForAPIKey()
+        default:
+            if !force && GroqTranscriber.apiKey == nil {
+                Toast.show("Add your API key later from the menu", kind: .info)
+            }
         }
     }
 
@@ -168,17 +177,42 @@ class AppDelegate: NSObject, NSApplicationDelegate {
 
         let alert = NSAlert()
         alert.messageText = "Enter Groq API Key"
-        alert.informativeText = "Get a free key at console.groq.com"
+        alert.informativeText = "Paste your key below. Don't have one yet? Click the link."
         alert.alertStyle = .informational
         alert.addButton(withTitle: "Save")
         alert.addButton(withTitle: "Cancel")
 
-        let input = NSSecureTextField(frame: NSRect(x: 0, y: 0, width: 300, height: 24))
+        let container = NSStackView(frame: NSRect(x: 0, y: 0, width: 320, height: 52))
+        container.orientation = .vertical
+        container.alignment = .leading
+        container.spacing = 6
+
+        let input = NSSecureTextField()
         input.placeholderString = "gsk_..."
+        input.translatesAutoresizingMaskIntoConstraints = false
         if let existing = GroqTranscriber.apiKey {
             input.stringValue = existing
         }
-        alert.accessoryView = input
+
+        let linkString = NSMutableAttributedString(string: "→ Get a key at console.groq.com/keys")
+        linkString.addAttributes([
+            .link: Self.groqKeysURL,
+            .foregroundColor: NSColor.linkColor,
+            .font: NSFont.systemFont(ofSize: 11),
+            .cursor: NSCursor.pointingHand,
+        ], range: NSRange(location: 0, length: linkString.length))
+        let link = NSTextField(labelWithAttributedString: linkString)
+        link.allowsEditingTextAttributes = true
+        link.isSelectable = true
+
+        container.addArrangedSubview(input)
+        container.addArrangedSubview(link)
+        NSLayoutConstraint.activate([
+            input.widthAnchor.constraint(equalToConstant: 320),
+        ])
+        container.setFrameSize(NSSize(width: 320, height: 52))
+
+        alert.accessoryView = container
         alert.window.initialFirstResponder = input
 
         let response = alert.runModal()
