@@ -1,0 +1,205 @@
+<!doctype html>
+<html lang="en">
+<head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+    <title>Murmur — voice to text, anywhere your cursor is</title>
+    <meta name="description" content="A lightweight macOS menu-bar app. Hold a key, speak, release — Murmur types your words anywhere your cursor is." />
+    <meta property="og:title" content="Murmur" />
+    <meta property="og:description" content="Hold. Speak. Release. Voice-to-text anywhere on macOS." />
+    <meta property="og:image" content="icon.png" />
+    <meta name="theme-color" content="#f6f2ec" />
+    <link rel="icon" type="image/png" href="icon.png" />
+    <link rel="apple-touch-icon" href="icon.png" />
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link href="https://fonts.googleapis.com/css2?family=Fraunces:ital,opsz,wght@0,9..144,400;0,9..144,500;0,9..144,600;1,9..144,400&family=Inter:wght@400;500;600&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet" />
+    <link rel="stylesheet" href="styles.css" />
+</head>
+<body>
+    <div class="grain" aria-hidden="true"></div>
+
+    <header class="nav">
+        <a class="brand" href="#">
+            <img src="icon.png" alt="" width="28" height="28" />
+            <span>Murmur</span>
+        </a>
+        <nav class="links">
+            <a href="#how">How it works</a>
+            <a href="#features">Features</a>
+            <a href="https://github.com/voising/murmur" target="_blank" rel="noopener">GitHub</a>
+            <a class="cta-mini" href="https://github.com/voising/murmur/releases/latest">Download</a>
+        </nav>
+    </header>
+
+    <main>
+        <section class="hero">
+            <div class="hero-copy">
+                <p class="eyebrow">For macOS · Powered by Whisper</p>
+                <h1>
+                    Your voice,<br />
+                    <em>typed for you.</em>
+                </h1>
+                <p class="lede">
+                    A small menu-bar app that turns dictation into a single key press.
+                    Hold right-Option, speak, release — your words appear wherever your
+                    cursor is. No window. No friction.
+                </p>
+                <div class="cta-row">
+                    <a class="cta" href="https://github.com/voising/murmur/releases/latest">
+                        <span class="cta-arrow">↓</span>
+                        Download for macOS
+                    </a>
+                    <span class="cta-meta">macOS 13 or later · Universal · Free</span>
+                </div>
+            </div>
+
+            <div class="hero-visual" aria-hidden="true">
+                <div class="window">
+                    <div class="window-bar">
+                        <span class="dot dot-r"></span>
+                        <span class="dot dot-y"></span>
+                        <span class="dot dot-g"></span>
+                        <span class="window-title">Untitled.md</span>
+                        <span class="rec">
+                            <span class="rec-dot"></span> recording
+                        </span>
+                    </div>
+                    <div class="window-body">
+                        <p class="caret-line">
+                            <span class="typed">Hey Sam — quick thought before our call. The proposal looks great, but the pricing on tier two feels off. Can we talk through it</span><span class="caret"></span>
+                        </p>
+                    </div>
+                </div>
+
+                <div class="floating-key">
+                    <kbd>⌥</kbd>
+                    <span>hold to dictate</span>
+                </div>
+
+                <svg class="wave" viewBox="0 0 280 60" aria-hidden="true">
+                    <g class="wave-bars">
+                        <rect x="2"   y="20" width="4" height="20" rx="2" />
+                        <rect x="14"  y="10" width="4" height="40" rx="2" />
+                        <rect x="26"  y="22" width="4" height="16" rx="2" />
+                        <rect x="38"  y="4"  width="4" height="52" rx="2" />
+                        <rect x="50"  y="16" width="4" height="28" rx="2" />
+                        <rect x="62"  y="24" width="4" height="12" rx="2" />
+                        <rect x="74"  y="8"  width="4" height="44" rx="2" />
+                        <rect x="86"  y="18" width="4" height="24" rx="2" />
+                        <rect x="98"  y="2"  width="4" height="56" rx="2" />
+                        <rect x="110" y="14" width="4" height="32" rx="2" />
+                        <rect x="122" y="22" width="4" height="16" rx="2" />
+                        <rect x="134" y="6"  width="4" height="48" rx="2" />
+                        <rect x="146" y="20" width="4" height="20" rx="2" />
+                        <rect x="158" y="12" width="4" height="36" rx="2" />
+                        <rect x="170" y="24" width="4" height="12" rx="2" />
+                        <rect x="182" y="4"  width="4" height="52" rx="2" />
+                        <rect x="194" y="18" width="4" height="24" rx="2" />
+                        <rect x="206" y="22" width="4" height="16" rx="2" />
+                        <rect x="218" y="10" width="4" height="40" rx="2" />
+                        <rect x="230" y="20" width="4" height="20" rx="2" />
+                        <rect x="242" y="14" width="4" height="32" rx="2" />
+                        <rect x="254" y="22" width="4" height="16" rx="2" />
+                        <rect x="266" y="18" width="4" height="24" rx="2" />
+                    </g>
+                </svg>
+            </div>
+        </section>
+
+        <section class="how" id="how">
+            <p class="section-eyebrow">How it works</p>
+            <ol class="steps">
+                <li>
+                    <span class="step-num">01</span>
+                    <h3>Hold</h3>
+                    <p>Press and hold the right-Option key. A discreet menu-bar indicator turns on.</p>
+                </li>
+                <li>
+                    <span class="step-num">02</span>
+                    <h3>Speak</h3>
+                    <p>Talk naturally. Pause, stumble, restart — Whisper handles real speech, not just dictation.</p>
+                </li>
+                <li>
+                    <span class="step-num">03</span>
+                    <h3>Release</h3>
+                    <p>Lift the key. Your transcription is pasted at the cursor in any app — Mail, Slack, your terminal.</p>
+                </li>
+            </ol>
+        </section>
+
+        <section class="features" id="features">
+            <p class="section-eyebrow">Why Murmur</p>
+            <h2>Quietly excellent at one thing.</h2>
+            <div class="feature-grid">
+                <article class="feature">
+                    <div class="feature-icon" aria-hidden="true">
+                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6"><path d="M5 12c1.5 4 4 6 7 6s5.5-2 7-6" stroke-linecap="round"/><path d="M12 18v3" stroke-linecap="round"/><rect x="9" y="3" width="6" height="12" rx="3"/></svg>
+                    </div>
+                    <h3>System-wide</h3>
+                    <p>Works in every app — Mail, Notion, VS&nbsp;Code, your terminal. One key, everywhere.</p>
+                </article>
+                <article class="feature">
+                    <div class="feature-icon" aria-hidden="true">
+                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6"><path d="M13 3 4 14h7l-1 7 9-11h-7l1-7Z" stroke-linejoin="round"/></svg>
+                    </div>
+                    <h3>Fast</h3>
+                    <p>Under a second from release to text. Powered by Groq — the fastest Whisper inference available.</p>
+                </article>
+                <article class="feature">
+                    <div class="feature-icon" aria-hidden="true">
+                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6"><path d="M12 3 4 6v6c0 5 3.5 8.5 8 9 4.5-.5 8-4 8-9V6l-8-3Z" stroke-linejoin="round"/><path d="m9 12 2 2 4-4" stroke-linecap="round" stroke-linejoin="round"/></svg>
+                    </div>
+                    <h3>Yours</h3>
+                    <p>Your API key, your account. No middleman, no telemetry, no logs. The Keychain holds it.</p>
+                </article>
+                <article class="feature">
+                    <div class="feature-icon" aria-hidden="true">
+                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6"><circle cx="12" cy="12" r="3"/><path d="M12 3v3M12 18v3M3 12h3M18 12h3M5.6 5.6l2.1 2.1M16.3 16.3l2.1 2.1M5.6 18.4l2.1-2.1M16.3 7.7l2.1-2.1" stroke-linecap="round"/></svg>
+                    </div>
+                    <h3>Out of the way</h3>
+                    <p>Lives in the menu bar. No dock icon, no windows, no notifications you didn't ask for.</p>
+                </article>
+            </div>
+        </section>
+
+        <section class="quote">
+            <blockquote>
+                <p>
+                    The keyboard was always faster than your voice.<br />
+                    <em>Until it wasn't.</em>
+                </p>
+            </blockquote>
+        </section>
+
+        <section class="install">
+            <p class="section-eyebrow">Get it</p>
+            <h2>Two minutes to set up.</h2>
+            <ol class="install-steps">
+                <li><span>1.</span> <a href="https://github.com/voising/murmur/releases/latest">Download the DMG</a> and drag Murmur to <code>Applications</code>.</li>
+                <li><span>2.</span> Grant Microphone &amp; Accessibility access on first launch.</li>
+                <li><span>3.</span> Paste your free <a href="https://console.groq.com/keys" target="_blank" rel="noopener">Groq API key</a> when prompted. Done.</li>
+            </ol>
+            <a class="cta cta-large" href="https://github.com/voising/murmur/releases/latest">
+                <span class="cta-arrow">↓</span>
+                Download Murmur
+            </a>
+            <p class="cta-meta center">macOS 13+ · Apple Silicon &amp; Intel · MIT licensed</p>
+        </section>
+    </main>
+
+    <footer>
+        <div class="footer-row">
+            <span class="brand brand-sm">
+                <img src="icon.png" alt="" width="20" height="20" />
+                Murmur
+            </span>
+            <span class="muted">A small thing, made carefully by RailsSquad.</span>
+            <span class="muted">
+                <a href="https://github.com/voising/murmur" target="_blank" rel="noopener">Source</a> ·
+                <a href="https://github.com/voising/murmur/blob/main/LICENSE" target="_blank" rel="noopener">MIT</a>
+            </span>
+        </div>
+    </footer>
+</body>
+</html>

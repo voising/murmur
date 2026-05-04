@@ -8,4 +8,3 @@ dist/
 *.dmg
 *.zip
 .env
-website/
