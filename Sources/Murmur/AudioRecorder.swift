@@ -53,6 +53,18 @@ class AudioRecorder {
             }
         }
 
+        // After switching devices, re-read the input bus format so the engine
+        // re-negotiates against the device we just selected. When AirPods are
+        // the system default input, the freshly-realized input unit inherits
+        // their Bluetooth HFP format; without this refresh, engine.start()
+        // fails with -10868 (kAudioUnitErr_FormatNotSupported) even though we
+        // pinned the MacBook mic. Handing this exact format to installTap (vs.
+        // nil) forces the tap to match the live hardware format.
+        let hwFormat = inputNode.outputFormat(forBus: 0)
+        guard hwFormat.sampleRate > 0, hwFormat.channelCount > 0 else {
+            return .invalidInputFormat
+        }
+
         guard let target = AVAudioFormat(
             commonFormat: .pcmFormatFloat32,
             sampleRate: targetSampleRate,
@@ -65,11 +77,11 @@ class AudioRecorder {
 
         let targetSR = self.targetSampleRate
 
-        // Pass nil format so AVAudio uses the bus's native format — the most
-        // reliable form. Build the converter lazily from the first buffer's
-        // actual format.
+        // Pass the refreshed hardware format (not nil) so the tap binds to the
+        // device we actually selected. Build the converter lazily from the
+        // first buffer's actual format.
         let bufferSize: AVAudioFrameCount = 4096
-        inputNode.installTap(onBus: 0, bufferSize: bufferSize, format: nil) { [weak self] buffer, _ in
+        inputNode.installTap(onBus: 0, bufferSize: bufferSize, format: hwFormat) { [weak self] buffer, _ in
             guard let self = self, let target = self.targetFormat else { return }
 
             if self.converter == nil {
