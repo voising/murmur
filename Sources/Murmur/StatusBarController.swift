@@ -114,6 +114,11 @@ class StatusBarController: NSObject {
         mouseItem.submenu = buildMouseTriggerSubmenu()
         menu.addItem(mouseItem)
 
+        let returnAfter = NSMenuItem(title: "Add Enter at End", action: #selector(toggleReturnAfterPaste), keyEquivalent: "")
+        returnAfter.target = self
+        returnAfter.state = TextPaster.pressReturnAfterPaste ? .on : .off
+        menu.addItem(returnAfter)
+
         let launch = NSMenuItem(title: "Launch at Login", action: #selector(toggleLaunchAtLogin), keyEquivalent: "")
         launch.target = self
         if #available(macOS 13.0, *) {
@@ -230,6 +235,11 @@ class StatusBarController: NSObject {
 
     @objc private func clearHistoryClicked() {
         onHistoryClear?()
+    }
+
+    @objc private func toggleReturnAfterPaste() {
+        TextPaster.pressReturnAfterPaste.toggle()
+        rebuildMenu()
     }
 
     @objc private func toggleLaunchAtLogin() {

@@ -2,6 +2,14 @@ import AppKit
 import CoreGraphics
 
 enum TextPaster {
+    private static let returnAfterPasteKey = "MurmurReturnAfterPaste"
+
+    /// When on, a Return is sent after the paste — e.g. to submit a chat message.
+    static var pressReturnAfterPaste: Bool {
+        get { UserDefaults.standard.bool(forKey: returnAfterPasteKey) }
+        set { UserDefaults.standard.set(newValue, forKey: returnAfterPasteKey) }
+    }
+
     static func paste(text: String) {
         let pasteboard = NSPasteboard.general
 
@@ -19,8 +27,14 @@ enum TextPaster {
         // Simulate Cmd+V
         simulatePaste()
 
-        // Restore previous pasteboard after a short delay
+        let sendReturn = pressReturnAfterPaste
+
+        // Restore previous pasteboard after a short delay. Press Return first
+        // (if enabled) so it lands while the transcription is still focused.
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.15) {
+            if sendReturn {
+                simulateReturn()
+            }
             if let contents = previousContents, !contents.isEmpty {
                 pasteboard.clearContents()
                 for (typeRaw, data) in contents {
@@ -41,6 +55,17 @@ enum TextPaster {
 
         let keyUp = CGEvent(keyboardEventSource: source, virtualKey: 9, keyDown: false)
         keyUp?.flags = .maskCommand
+        keyUp?.post(tap: .cgAnnotatedSessionEventTap)
+    }
+
+    private static func simulateReturn() {
+        let source = CGEventSource(stateID: .hidSystemState)
+
+        // Key code for Return is 36
+        let keyDown = CGEvent(keyboardEventSource: source, virtualKey: 36, keyDown: true)
+        keyDown?.post(tap: .cgAnnotatedSessionEventTap)
+
+        let keyUp = CGEvent(keyboardEventSource: source, virtualKey: 36, keyDown: false)
         keyUp?.post(tap: .cgAnnotatedSessionEventTap)
     }
 }
