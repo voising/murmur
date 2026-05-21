@@ -13,6 +13,8 @@ class StatusBarController: NSObject {
     var onShowHelp: (() -> Void)?
     var onHistorySelect: ((String) -> Void)?
     var onHistoryClear: (() -> Void)?
+    var onSetMouseTrigger: (() -> Void)?
+    var onClearMouseTrigger: (() -> Void)?
 
     private var inputDevices: [AudioInputDevice] = []
 
@@ -108,6 +110,10 @@ class StatusBarController: NSObject {
         micItem.submenu = buildMicrophoneSubmenu()
         menu.addItem(micItem)
 
+        let mouseItem = NSMenuItem(title: "Mouse Trigger", action: nil, keyEquivalent: "")
+        mouseItem.submenu = buildMouseTriggerSubmenu()
+        menu.addItem(mouseItem)
+
         let launch = NSMenuItem(title: "Launch at Login", action: #selector(toggleLaunchAtLogin), keyEquivalent: "")
         launch.target = self
         if #available(macOS 13.0, *) {
@@ -165,7 +171,46 @@ class StatusBarController: NSObject {
         return submenu
     }
 
+    private func buildMouseTriggerSubmenu() -> NSMenu {
+        let submenu = NSMenu()
+        submenu.autoenablesItems = false
+
+        if let button = KeyMonitor.triggerMouseButton {
+            let current = NSMenuItem(title: "Bound to button \(button)", action: nil, keyEquivalent: "")
+            current.isEnabled = false
+            submenu.addItem(current)
+            submenu.addItem(.separator())
+
+            let rebind = NSMenuItem(title: "Re-bind…", action: #selector(setMouseTriggerClicked), keyEquivalent: "")
+            rebind.target = self
+            submenu.addItem(rebind)
+
+            let clear = NSMenuItem(title: "Clear", action: #selector(clearMouseTriggerClicked), keyEquivalent: "")
+            clear.target = self
+            submenu.addItem(clear)
+        } else {
+            let none = NSMenuItem(title: "Not set", action: nil, keyEquivalent: "")
+            none.isEnabled = false
+            submenu.addItem(none)
+            submenu.addItem(.separator())
+
+            let set = NSMenuItem(title: "Set Mouse Button…", action: #selector(setMouseTriggerClicked), keyEquivalent: "")
+            set.target = self
+            submenu.addItem(set)
+        }
+
+        return submenu
+    }
+
+    /// Rebuild the menu to reflect a changed mouse-trigger binding.
+    func refreshMenu() {
+        rebuildMenu()
+    }
+
     // MARK: - Actions
+
+    @objc private func setMouseTriggerClicked() { onSetMouseTrigger?() }
+    @objc private func clearMouseTriggerClicked() { onClearMouseTrigger?() }
 
     @objc private func microphoneSelected(_ sender: NSMenuItem) {
         if sender.tag == -1 {

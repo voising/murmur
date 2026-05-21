@@ -32,6 +32,19 @@ class AppDelegate: NSObject, NSApplicationDelegate {
             self?.history.clear()
             self?.statusBar.setHistory([])
         }
+        statusBar.onSetMouseTrigger = { [weak self] in
+            Toast.show("Click the mouse button you want to use (any button except left/right)…", kind: .info, duration: 5)
+            self?.keyMonitor.startLearningMouseButton { button in
+                Toast.show("Bound to mouse button \(button) — click to start/stop recording", kind: .success)
+                self?.statusBar.refreshMenu()
+                self?.statusBar.updateStatus("Ready — click mouse button \(button) to record")
+            }
+        }
+        statusBar.onClearMouseTrigger = { [weak self] in
+            KeyMonitor.triggerMouseButton = nil
+            self?.statusBar.refreshMenu()
+            Toast.show("Mouse trigger cleared", kind: .info)
+        }
         statusBar.setHistory(history.items)
 
         audioRecorder = AudioRecorder()
@@ -47,6 +60,14 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         keyMonitor = KeyMonitor()
         keyMonitor.onPress = { [weak self] in self?.startRecording() }
         keyMonitor.onRelease = { [weak self] in self?.stopRecordingAndTranscribe() }
+        keyMonitor.onMouseToggle = { [weak self] in
+            guard let self = self else { return }
+            if self.isRecording {
+                self.stopRecordingAndTranscribe()
+            } else {
+                self.startRecording()
+            }
+        }
         keyMonitor.onStatusChange = { [weak self] message in
             self?.statusBar.updateStatus(message)
         }
