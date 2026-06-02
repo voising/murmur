@@ -95,9 +95,9 @@ class AppDelegate: NSObject, NSApplicationDelegate {
             let msg: String
             switch err {
             case .micPermissionDenied: msg = "Microphone access denied"
-            case .invalidInputFormat: msg = "No audio input device available"
-            case .converterUnavailable: msg = "Audio converter init failed"
-            case .engineFailed(let e): msg = "Audio engine error: \(e.localizedDescription)"
+            case .invalidInputFormat: msg = "Audio input format unsupported"
+            case .noInputDevice: msg = "No input device available"
+            case .audioUnitFailed(let status): msg = "Audio unit error \(status)"
             }
             DispatchQueue.main.async {
                 self.statusBar.setIdle()
@@ -121,6 +121,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
             DispatchQueue.main.async {
                 self.statusBar.setIdle()
                 self.statusBar.updateStatus("No audio captured")
+                Toast.show("No audio captured — check that your input device isn't muted", kind: .error, duration: 4)
             }
             return
         }

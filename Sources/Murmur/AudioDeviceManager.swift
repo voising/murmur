@@ -54,6 +54,32 @@ enum AudioDeviceManager {
         return listInputDevices().first(where: { $0.uid == uid })?.id
     }
 
+    /// The system-wide default input device, or nil if unavailable.
+    static func defaultInputDeviceID() -> AudioDeviceID? {
+        var addr = AudioObjectPropertyAddress(
+            mSelector: kAudioHardwarePropertyDefaultInputDevice,
+            mScope: kAudioObjectPropertyScopeGlobal,
+            mElement: kAudioObjectPropertyElementMain
+        )
+        var deviceID: AudioDeviceID = 0
+        var size = UInt32(MemoryLayout<AudioDeviceID>.size)
+        let status = AudioObjectGetPropertyData(AudioObjectID(kAudioObjectSystemObject), &addr, 0, nil, &size, &deviceID)
+        return status == noErr && deviceID != 0 ? deviceID : nil
+    }
+
+    /// Human-readable name for a device, or "?" if unknown. Used for logging.
+    static func deviceName(_ deviceID: AudioDeviceID) -> String {
+        guard deviceID != 0 else { return "none" }
+        return stringProperty(deviceID, kAudioObjectPropertyName, scope: kAudioObjectPropertyScopeGlobal) ?? "?"
+    }
+
+    /// "<name> (id=<n>, uid=<uid-or-?>)" — compact device descriptor for log lines.
+    static func describe(_ deviceID: AudioDeviceID) -> String {
+        let name = deviceName(deviceID)
+        let uid = stringProperty(deviceID, kAudioDevicePropertyDeviceUID, scope: kAudioObjectPropertyScopeGlobal) ?? "?"
+        return "\(name) (id=\(deviceID), uid=\(uid))"
+    }
+
     // MARK: - CoreAudio helpers
 
     private static func hasInputStreams(_ id: AudioDeviceID) -> Bool {
