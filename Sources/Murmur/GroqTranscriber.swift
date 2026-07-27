@@ -1,9 +1,43 @@
 import Foundation
 
+struct TranscriptionLanguage {
+    let code: String?   // nil = let Whisper auto-detect
+    let name: String
+}
+
 class GroqTranscriber {
     private static let apiKeyAccount = "GroqAPIKey"
     private static let endpoint = URL(string: "https://api.groq.com/openai/v1/audio/transcriptions")!
     private static let maxAttempts = 3
+
+    private static let languageKey = "MurmurLanguage"
+    private static let autoValue = "auto"
+
+    static let supportedLanguages: [TranscriptionLanguage] = [
+        TranscriptionLanguage(code: nil,  name: "Auto-detect"),
+        TranscriptionLanguage(code: "en", name: "English"),
+        TranscriptionLanguage(code: "fr", name: "French"),
+        TranscriptionLanguage(code: "es", name: "Spanish"),
+        TranscriptionLanguage(code: "de", name: "German"),
+        TranscriptionLanguage(code: "it", name: "Italian"),
+        TranscriptionLanguage(code: "pt", name: "Portuguese"),
+    ]
+
+    /// Pinned language, or nil for auto-detect. Defaults to English so existing
+    /// installs keep the behaviour they had before the picker existed.
+    static var languageCode: String? {
+        get {
+            guard let raw = UserDefaults.standard.string(forKey: languageKey) else { return "en" }
+            return raw == autoValue ? nil : raw
+        }
+        set { UserDefaults.standard.set(newValue ?? autoValue, forKey: languageKey) }
+    }
+
+    /// turbo is the fastest model but noticeably weaker outside English, so
+    /// anything other than a hard English pin gets the full large-v3.
+    private static var model: String {
+        languageCode == "en" ? "whisper-large-v3-turbo" : "whisper-large-v3"
+    }
 
     /// Dedicated session with explicit timeouts. The default shared session
     /// waits 60s before giving up, which feels like a hang; we want to fail
@@ -52,12 +86,14 @@ class GroqTranscriber {
         // model field
         body.append("--\(boundary)\r\n")
         body.append("Content-Disposition: form-data; name=\"model\"\r\n\r\n")
-        body.append("whisper-large-v3-turbo\r\n")
+        body.append("\(Self.model)\r\n")
 
-        // language field
-        body.append("--\(boundary)\r\n")
-        body.append("Content-Disposition: form-data; name=\"language\"\r\n\r\n")
-        body.append("en\r\n")
+        // language field — omitted entirely when auto-detecting
+        if let language = Self.languageCode {
+            body.append("--\(boundary)\r\n")
+            body.append("Content-Disposition: form-data; name=\"language\"\r\n\r\n")
+            body.append("\(language)\r\n")
+        }
 
         // response_format field
         body.append("--\(boundary)\r\n")

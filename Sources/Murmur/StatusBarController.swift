@@ -117,6 +117,16 @@ class StatusBarController: NSObject {
         micItem.submenu = buildMicrophoneSubmenu()
         menu.addItem(micItem)
 
+        let noiseSuppression = NSMenuItem(title: "Noise Suppression", action: #selector(toggleNoiseSuppression), keyEquivalent: "")
+        noiseSuppression.target = self
+        noiseSuppression.state = AudioRecorder.noiseSuppressionEnabled ? .on : .off
+        noiseSuppression.toolTip = "Runs the mic through Apple's voice processing (noise + echo removal). Best for AirPods in noisy places; leave off for a good mic in a quiet room."
+        menu.addItem(noiseSuppression)
+
+        let languageItem = NSMenuItem(title: "Language", action: nil, keyEquivalent: "")
+        languageItem.submenu = buildLanguageSubmenu()
+        menu.addItem(languageItem)
+
         let mouseItem = NSMenuItem(title: "Mouse Trigger", action: nil, keyEquivalent: "")
         mouseItem.submenu = buildMouseTriggerSubmenu()
         menu.addItem(mouseItem)
@@ -156,10 +166,11 @@ class StatusBarController: NSObject {
         inputDevices = AudioDeviceManager.listInputDevices()
         let selectedUID = AudioDeviceManager.selectedUID
 
-        let auto = NSMenuItem(title: "System Default", action: #selector(microphoneSelected(_:)), keyEquivalent: "")
+        let auto = NSMenuItem(title: "Automatic (built-in mic)", action: #selector(microphoneSelected(_:)), keyEquivalent: "")
         auto.target = self
         auto.tag = -1
         auto.state = (selectedUID == nil) ? .on : .off
+        auto.toolTip = "Records from the built-in microphone, ignoring whatever headset you're listening on. Bluetooth mics drop to a 24 kHz phone-call codec and transcribe noticeably worse."
         submenu.addItem(auto)
 
         if !inputDevices.isEmpty {
@@ -178,6 +189,23 @@ class StatusBarController: NSObject {
             let missing = NSMenuItem(title: "Pinned device not connected", action: nil, keyEquivalent: "")
             missing.isEnabled = false
             submenu.addItem(missing)
+        }
+
+        return submenu
+    }
+
+    private func buildLanguageSubmenu() -> NSMenu {
+        let submenu = NSMenu()
+        submenu.autoenablesItems = false
+        let selected = GroqTranscriber.languageCode
+
+        for (index, language) in GroqTranscriber.supportedLanguages.enumerated() {
+            let item = NSMenuItem(title: language.name, action: #selector(languageSelected(_:)), keyEquivalent: "")
+            item.target = self
+            item.tag = index
+            item.state = (language.code == selected) ? .on : .off
+            submenu.addItem(item)
+            if language.code == nil { submenu.addItem(.separator()) }
         }
 
         return submenu
@@ -234,6 +262,14 @@ class StatusBarController: NSObject {
     }
 
 
+    @objc private func languageSelected(_ sender: NSMenuItem) {
+        guard GroqTranscriber.supportedLanguages.indices.contains(sender.tag) else { return }
+        let language = GroqTranscriber.supportedLanguages[sender.tag]
+        GroqTranscriber.languageCode = language.code
+        rebuildMenu()
+        Toast.show("Language: \(language.name)", kind: .success, duration: 1.5)
+    }
+
     @objc private func historyItemClicked(_ sender: NSMenuItem) {
         let index = sender.tag
         guard history.indices.contains(index) else { return }
@@ -242,6 +278,16 @@ class StatusBarController: NSObject {
 
     @objc private func clearHistoryClicked() {
         onHistoryClear?()
+    }
+
+    @objc private func toggleNoiseSuppression() {
+        AudioRecorder.noiseSuppressionEnabled.toggle()
+        if AudioRecorder.noiseSuppressionEnabled {
+            // Forget past failures so devices that couldn't do voice processing
+            // get retried once rather than being written off forever.
+            AudioRecorder.clearVoiceProcessingBlocklist()
+        }
+        rebuildMenu()
     }
 
     @objc private func toggleReturnAfterPaste() {
@@ -320,6 +366,10 @@ class StatusBarController: NSObject {
             return
         }
         spinIndex = 0
+        // Drop the red tint left over from recording — a tint colour overrides
+        // template rendering, which is what makes the icon invisible in dark mode.
+        button.contentTintColor = nil
+        button.alphaValue = 1
         button.image = Self.spinFrames[0]
         spinTimer?.invalidate()
         spinTimer = Timer.scheduledTimer(withTimeInterval: 0.13, repeats: true) { [weak self] _ in

@@ -15,6 +15,36 @@ private let audioLog = Logger(subsystem: "com.railssquad.murmur", category: "aud
 /// (especially after Bluetooth HFP), leading to silent zero-buffer
 /// recordings.
 final class AudioRecorder {
+    private static let noiseSuppressionKey = "MurmurNoiseSuppression"
+
+    /// Captures through Apple's voice-processing unit (noise suppression, echo
+    /// cancellation) instead of the plain AUHAL. Off by default: on a decent mic
+    /// in a quiet room the processing hurts more than it helps, and the unit
+    /// takes over the device's output side for its echo reference while
+    /// recording. Worth it on AirPods in a café.
+    static var noiseSuppressionEnabled: Bool {
+        get { UserDefaults.standard.bool(forKey: noiseSuppressionKey) }
+        set { UserDefaults.standard.set(newValue, forKey: noiseSuppressionKey) }
+    }
+
+    private static let vpioBlocklistKey = "MurmurVoiceProcessingUnsupportedDevices"
+
+    /// Device UIDs whose voice-processing unit refused to initialize. VPIO is
+    /// slow to instantiate (~1s on Bluetooth) and it fails the same way every
+    /// time on a device that doesn't support it, so paying that cost on every
+    /// keypress just to fall back would eat the first second of every
+    /// recording. Remember the failure and go straight to AUHAL instead.
+    private static var vpioBlocklist: Set<String> {
+        get { Set(UserDefaults.standard.stringArray(forKey: vpioBlocklistKey) ?? []) }
+        set { UserDefaults.standard.set(Array(newValue), forKey: vpioBlocklistKey) }
+    }
+
+    /// Called when the user re-enables noise suppression: give every device
+    /// another chance, since a macOS or firmware update may have fixed it.
+    static func clearVoiceProcessingBlocklist() {
+        UserDefaults.standard.removeObject(forKey: vpioBlocklistKey)
+    }
+
     private var unit: AudioUnit?
     private var samples: [Float] = []
     private let targetSampleRate: Double = 16000
@@ -70,24 +100,67 @@ final class AudioRecorder {
         guard AVCaptureDevice.authorizationStatus(for: .audio) == .authorized else {
             return .micPermissionDenied
         }
+        let startedAt = DispatchTime.now()
 
         samples.removeAll()
         bufferCount = 0
         converterErrorCount = 0
         renderErrorStatus = noErr
 
+        // An explicit pin always wins; otherwise prefer the built-in mic over
+        // the system default, which drifts to whatever headset is connected.
         let pinnedID = AudioDeviceManager.resolveSelectedDeviceID()
-        let deviceID = pinnedID ?? AudioDeviceManager.defaultInputDeviceID() ?? 0
+        let deviceID = pinnedID
+            ?? AudioDeviceManager.builtInInputDeviceID()
+            ?? AudioDeviceManager.defaultInputDeviceID()
+            ?? 0
         guard deviceID != 0 else {
             audioLog.error("startRecording: no input device available")
             return .noInputDevice
         }
         audioLog.notice("startRecording: device=\(AudioDeviceManager.describe(deviceID), privacy: .public) pinned=\(pinnedID != nil, privacy: .public)")
 
-        // 1. Instantiate an AUHAL output unit.
+        let uid = AudioDeviceManager.deviceUID(deviceID)
+        let blocked = uid.map { Self.vpioBlocklist.contains($0) } ?? false
+        let tryVoiceProcessing = Self.noiseSuppressionEnabled && !blocked
+        if Self.noiseSuppressionEnabled && blocked {
+            audioLog.notice("skipping voice processing: device previously failed to initialize it")
+        }
+
+        if tryVoiceProcessing {
+            if let error = startUnit(subType: kAudioUnitSubType_VoiceProcessingIO, deviceID: deviceID) {
+                // VPIO is pickier than AUHAL — it drives the output side too and
+                // rejects formats/devices the HAL unit accepts. A failure here
+                // must never cost us the recording, so retry unprocessed.
+                audioLog.error("voice processing unit failed (\(String(describing: error), privacy: .public)); falling back to plain AUHAL")
+                if let uid = uid { Self.vpioBlocklist.insert(uid) }
+                releaseRenderBuffers()
+                if let fallbackError = startUnit(subType: kAudioUnitSubType_HALOutput, deviceID: deviceID) {
+                    return fallbackError
+                }
+            }
+        } else if let error = startUnit(subType: kAudioUnitSubType_HALOutput, deviceID: deviceID) {
+            return error
+        }
+
+        isRecording = true
+        let elapsedMs = (DispatchTime.now().uptimeNanoseconds - startedAt.uptimeNanoseconds) / 1_000_000
+        audioLog.notice("startRecording: ready in \(elapsedMs, privacy: .public)ms")
+        return nil
+    }
+
+    /// Builds, configures and starts an output unit of `subType` bound to
+    /// `deviceID`. `kAudioUnitSubType_HALOutput` is the raw capture path;
+    /// `kAudioUnitSubType_VoiceProcessingIO` is the same wiring with Apple's
+    /// voice DSP in front of the callback (and is what makes macOS offer the
+    /// Voice Isolation mic mode in Control Center for this app).
+    private func startUnit(subType: OSType, deviceID: AudioDeviceID) -> StartError? {
+        let voiceProcessing = subType == kAudioUnitSubType_VoiceProcessingIO
+
+        // 1. Instantiate the output unit.
         var desc = AudioComponentDescription(
             componentType: kAudioUnitType_Output,
-            componentSubType: kAudioUnitSubType_HALOutput,
+            componentSubType: subType,
             componentManufacturer: kAudioUnitManufacturer_Apple,
             componentFlags: 0,
             componentFlagsMask: 0
@@ -123,6 +196,39 @@ final class AudioRecorder {
         )
         guard status == noErr else { return failConfig("CurrentDevice", status) }
 
+        // 3b. Voice-processing tuning. Both are best-effort: a failure here
+        //     leaves a working (if slightly worse behaved) unit, so we log
+        //     rather than tear down.
+        if voiceProcessing {
+            // AGC pumps badly on quiet speech between loud background bursts,
+            // which is exactly the case we turned this on for.
+            var agcOff: UInt32 = 0
+            let agcStatus = AudioUnitSetProperty(
+                unit, kAUVoiceIOProperty_VoiceProcessingEnableAGC, kAudioUnitScope_Global,
+                0, &agcOff, u32
+            )
+            if agcStatus != noErr {
+                audioLog.error("disable AGC failed status=\(agcStatus, privacy: .public)")
+            }
+
+            // VPIO opens the output side for its echo reference, which by
+            // default ducks whatever else is playing. Push-to-talk shouldn't
+            // stutter the user's music.
+            if #available(macOS 14.0, *) {
+                var ducking = AUVoiceIOOtherAudioDuckingConfiguration(
+                    mEnableAdvancedDucking: false,
+                    mDuckingLevel: .min
+                )
+                let duckStatus = AudioUnitSetProperty(
+                    unit, kAUVoiceIOProperty_OtherAudioDuckingConfiguration, kAudioUnitScope_Global,
+                    0, &ducking, UInt32(MemoryLayout<AUVoiceIOOtherAudioDuckingConfiguration>.size)
+                )
+                if duckStatus != noErr {
+                    audioLog.error("ducking config failed status=\(duckStatus, privacy: .public)")
+                }
+            }
+        }
+
         // 4. Read the device's hardware format (scope=Input bus=1) and
         //    reflect it back as the client format (scope=Output bus=1).
         //    Even though AUHAL will infer a default client format during
@@ -142,6 +248,8 @@ final class AudioRecorder {
         // Canonical Float32 non-interleaved at the device's sample rate and
         // channel count. This is what we want delivered to the callback;
         // AUHAL converts internally from the hardware format if needed.
+        // VPIO always emits a single processed channel, so ask for mono there
+        // rather than having it reject a multi-channel client format.
         var clientAsbd = AudioStreamBasicDescription(
             mSampleRate: hwAsbd.mSampleRate,
             mFormatID: kAudioFormatLinearPCM,
@@ -149,7 +257,7 @@ final class AudioRecorder {
             mBytesPerPacket: 4,
             mFramesPerPacket: 1,
             mBytesPerFrame: 4,
-            mChannelsPerFrame: hwAsbd.mChannelsPerFrame,
+            mChannelsPerFrame: voiceProcessing ? 1 : hwAsbd.mChannelsPerFrame,
             mBitsPerChannel: 32,
             mReserved: 0
         )
@@ -170,7 +278,9 @@ final class AudioRecorder {
         guard status == noErr else { return failConfig("SetInputCallback", status) }
 
         // 6. Initialize. For Bluetooth devices (AirPods), this is what
-        //    triggers macOS to switch from A2DP to HFP.
+        //    triggers macOS to switch from A2DP to HFP. For VPIO it is also
+        //    where the DSP graph gets built, so an unsupported device or
+        //    format surfaces here.
         status = AudioUnitInitialize(unit)
         guard status == noErr else { return failConfig("AudioUnitInitialize", status) }
 
@@ -245,8 +355,7 @@ final class AudioRecorder {
         status = AudioOutputUnitStart(unit)
         guard status == noErr else { return failConfig("AudioOutputUnitStart", status) }
 
-        isRecording = true
-        audioLog.notice("AUHAL running: capturing sr=\(postAsbd.mSampleRate, privacy: .public) ch=\(postAsbd.mChannelsPerFrame, privacy: .public) ablBuffers=\(ablBufferCount, privacy: .public)")
+        audioLog.notice("\(voiceProcessing ? "VPIO" : "AUHAL", privacy: .public) running: capturing sr=\(postAsbd.mSampleRate, privacy: .public) ch=\(postAsbd.mChannelsPerFrame, privacy: .public) ablBuffers=\(ablBufferCount, privacy: .public)")
         return nil
     }
 
@@ -269,17 +378,7 @@ final class AudioRecorder {
 
         audioLog.notice("stopRecording: buffers=\(self.bufferCount, privacy: .public) samples=\(collected.count, privacy: .public) converterErrors=\(self.converterErrorCount, privacy: .public) lastRenderStatus=\(self.renderErrorStatus, privacy: .public)")
 
-        self.converter = nil
-        self.renderBuffer = nil
-        self.outputBuffer = nil
-        self.clientFormat = nil
-        self.targetFormat = nil
-        for ptr in renderABLBuffers { ptr.deallocate() }
-        renderABLBuffers = []
-        if let abl = renderABL {
-            UnsafeMutableRawPointer(abl).deallocate()
-            renderABL = nil
-        }
+        releaseRenderBuffers()
 
         guard !collected.isEmpty else {
             if bufferCount == 0 {
@@ -371,6 +470,23 @@ final class AudioRecorder {
             }
         }
         return noErr
+    }
+
+    /// Drops the converter and the manually-allocated render storage. Safe to
+    /// call twice — used both at stop and between a failed VPIO attempt and the
+    /// AUHAL retry, which reallocates everything from scratch.
+    private func releaseRenderBuffers() {
+        self.converter = nil
+        self.renderBuffer = nil
+        self.outputBuffer = nil
+        self.clientFormat = nil
+        self.targetFormat = nil
+        for ptr in renderABLBuffers { ptr.deallocate() }
+        renderABLBuffers = []
+        if let abl = renderABL {
+            UnsafeMutableRawPointer(abl).deallocate()
+            renderABL = nil
+        }
     }
 
     private func failConfig(_ label: String, _ status: OSStatus) -> StartError {
