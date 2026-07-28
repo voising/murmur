@@ -6,8 +6,10 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     private var keyMonitor: KeyMonitor!
     private var audioRecorder: AudioRecorder!
     private var transcriber: GroqTranscriber!
-    private var history = HistoryStore()
     private var isRecording = false
+    private var recordingStartedAt: Date?
+
+    private let state = AppState.shared
 
     private let startSound = NSSound(contentsOfFile: "/System/Library/Sounds/Tink.aiff", byReference: true)
     private let stopSound = NSSound(contentsOfFile: "/System/Library/Sounds/Pop.aiff", byReference: true)
@@ -19,33 +21,18 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         stopSound?.volume = 0.35
 
         statusBar = StatusBarController()
-        statusBar.onSetAPIKey = { [weak self] in self?.promptForAPIKey() }
+        statusBar.onOpenHistory = { AppWindows.shared.showHistory() }
+        statusBar.onOpenSettings = { AppWindows.shared.showSettings() }
         statusBar.onShowHelp = { [weak self] in self?.showOnboarding(force: true) }
         statusBar.onQuit = { NSApp.terminate(nil) }
-        statusBar.onHistorySelect = { text in
-            let pb = NSPasteboard.general
-            pb.clearContents()
-            pb.setString(text, forType: .string)
+        statusBar.onHistorySelect = { [weak self] text in
+            self?.state.copyToPasteboard(text)
             Toast.show("Copied to clipboard", kind: .success, duration: 1.5)
         }
-        statusBar.onHistoryClear = { [weak self] in
-            self?.history.clear()
-            self?.statusBar.setHistory([])
-        }
-        statusBar.onSetMouseTrigger = { [weak self] in
-            Toast.show("Click the mouse button you want to use (any button except left/right)…", kind: .info, duration: 5)
-            self?.keyMonitor.startLearningMouseButton { button in
-                Toast.show("Bound to mouse button \(button) — click to start/stop recording", kind: .success)
-                self?.statusBar.refreshMenu()
-                self?.statusBar.updateStatus("Ready — click mouse button \(button) to record")
-            }
-        }
-        statusBar.onClearMouseTrigger = { [weak self] in
-            KeyMonitor.triggerMouseButton = nil
-            self?.statusBar.refreshMenu()
-            Toast.show("Mouse trigger cleared", kind: .info)
-        }
-        statusBar.setHistory(history.items)
+        statusBar.setHistory(state.history)
+
+        state.onSetMouseTrigger = { [weak self] in self?.beginLearningMouseButton() }
+        state.onShowHelp = { [weak self] in self?.showOnboarding(force: true) }
 
         audioRecorder = AudioRecorder()
         transcriber = GroqTranscriber()
@@ -53,7 +40,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         audioRecorder.requestMicPermission { [weak self] granted in
             if !granted {
                 Toast.show("Microphone access denied — enable in System Settings → Privacy", kind: .error, duration: 5)
-                self?.statusBar.updateStatus("Mic permission denied")
+                self?.setStatus("Mic permission denied")
             }
         }
 
@@ -68,9 +55,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
                 self.startRecording()
             }
         }
-        keyMonitor.onStatusChange = { [weak self] message in
-            self?.statusBar.updateStatus(message)
-        }
+        keyMonitor.onStatusChange = { [weak self] message in self?.setStatus(message) }
         keyMonitor.start()
 
         let firstRun = !UserDefaults.standard.bool(forKey: Self.onboardedKey)
@@ -79,16 +64,43 @@ class AppDelegate: NSObject, NSApplicationDelegate {
                 self?.showOnboarding(force: false)
             }
         } else if GroqTranscriber.apiKey == nil {
-            DispatchQueue.main.asyncAfter(deadline: .now() + 0.4) { [weak self] in
-                self?.promptForAPIKey()
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.4) {
+                AppWindows.shared.showSettings()
             }
+        } else if state.showInDock {
+            // A Dock-visible app that launches with no window looks broken.
+            AppWindows.shared.showHistory()
         }
     }
+
+    /// Clicking the Dock icon with no window open reopens the history window.
+    func applicationShouldHandleReopen(_ sender: NSApplication, hasVisibleWindows flag: Bool) -> Bool {
+        if !flag { AppWindows.shared.showHistory() }
+        return true
+    }
+
+    /// Closing the last window shouldn't quit — the hotkey still works.
+    func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool {
+        false
+    }
+
+    // MARK: - Menu actions
+
+    @objc func showSettings(_ sender: Any?) { AppWindows.shared.showSettings() }
+    @objc func showHistoryWindow(_ sender: Any?) { AppWindows.shared.showHistory() }
+    @objc func showHelp(_ sender: Any?) { showOnboarding(force: true) }
+
+    @objc func showAbout(_ sender: Any?) {
+        AppWindows.shared.showSettings()
+    }
+
+    // MARK: - Recording
 
     private func startRecording() {
         guard !isRecording else { return }
         guard GroqTranscriber.apiKey != nil else {
             Toast.show("Set your Groq API key first", kind: .error)
+            AppWindows.shared.showSettings()
             return
         }
         if let err = audioRecorder.startRecording() {
@@ -101,26 +113,31 @@ class AppDelegate: NSObject, NSApplicationDelegate {
             }
             DispatchQueue.main.async {
                 self.statusBar.setIdle()
+                self.state.setPhase(.idle, message: msg)
                 Toast.show(msg, kind: .error)
             }
             return
         }
         isRecording = true
+        recordingStartedAt = Date()
         DispatchQueue.main.async {
             self.startSound?.play()
             self.statusBar.setRecording()
             self.statusBar.updateStatus("Recording…")
+            self.state.setPhase(.recording, message: "Recording…")
         }
     }
 
     private func stopRecordingAndTranscribe() {
         guard isRecording else { return }
         isRecording = false
+        let duration = recordingStartedAt.map { Date().timeIntervalSince($0) } ?? 0
+        recordingStartedAt = nil
 
         guard let wavData = audioRecorder.stopRecording() else {
             DispatchQueue.main.async {
                 self.statusBar.setIdle()
-                self.statusBar.updateStatus("No audio captured")
+                self.setStatus("No audio captured")
                 Toast.show("No audio captured — check that your input device isn't muted", kind: .error, duration: 4)
             }
             return
@@ -130,6 +147,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
             self.stopSound?.play()
             self.statusBar.setTranscribing()
             self.statusBar.updateStatus("Transcribing…")
+            self.state.setPhase(.transcribing, message: "Transcribing…")
         }
 
         Task {
@@ -138,24 +156,42 @@ class AppDelegate: NSObject, NSApplicationDelegate {
                 await MainActor.run {
                     if !text.isEmpty {
                         TextPaster.paste(text: text)
-                        self.history.add(text)
-                        self.statusBar.setHistory(self.history.items)
-                        self.statusBar.updateStatus("Ready — hold right Option")
+                        self.state.record(text: text, duration: duration)
+                        self.statusBar.setHistory(self.state.history)
+                        self.setStatus("Ready — hold right Option")
                     } else {
                         Toast.show("No speech detected", kind: .info)
-                        self.statusBar.updateStatus("Ready")
+                        self.setStatus("Ready")
                     }
                     self.statusBar.setIdle()
+                    self.state.setPhase(.idle)
                 }
             } catch {
                 await MainActor.run {
                     Toast.show("Transcription failed: \(error.localizedDescription)", kind: .error, duration: 4)
-                    self.statusBar.updateStatus("Ready")
+                    self.setStatus("Ready")
                     self.statusBar.setIdle()
+                    self.state.setPhase(.idle)
                 }
             }
         }
     }
+
+    private func setStatus(_ message: String) {
+        statusBar.updateStatus(message)
+        state.statusMessage = message
+    }
+
+    private func beginLearningMouseButton() {
+        Toast.show("Click the mouse button you want to use (any button except left/right)…", kind: .info, duration: 5)
+        keyMonitor.startLearningMouseButton { [weak self] button in
+            Toast.show("Bound to mouse button \(button) — click to start/stop recording", kind: .success)
+            self?.statusBar.refreshMenu()
+            self?.setStatus("Ready — click mouse button \(button) to record")
+        }
+    }
+
+    // MARK: - Onboarding
 
     private static let groqKeysURL = URL(string: "https://console.groq.com/keys")!
 
@@ -174,7 +210,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         A free Groq API key is required.
         """
         alert.alertStyle = .informational
-        alert.addButton(withTitle: "Set API Key")
+        alert.addButton(withTitle: "Open Settings")
         alert.addButton(withTitle: "Get API Key")
         alert.addButton(withTitle: "Later")
 
@@ -183,66 +219,13 @@ class AppDelegate: NSObject, NSApplicationDelegate {
 
         switch response {
         case .alertFirstButtonReturn:
-            promptForAPIKey()
+            AppWindows.shared.showSettings()
         case .alertSecondButtonReturn:
             NSWorkspace.shared.open(Self.groqKeysURL)
-            promptForAPIKey()
+            AppWindows.shared.showSettings()
         default:
             if !force && GroqTranscriber.apiKey == nil {
-                Toast.show("Add your API key later from the menu", kind: .info)
-            }
-        }
-    }
-
-    private func promptForAPIKey() {
-        NSApp.activate(ignoringOtherApps: true)
-
-        let alert = NSAlert()
-        alert.messageText = "Enter Groq API Key"
-        alert.informativeText = "Paste your key below. Don't have one yet? Click the link."
-        alert.alertStyle = .informational
-        alert.addButton(withTitle: "Save")
-        alert.addButton(withTitle: "Cancel")
-
-        let container = NSStackView(frame: NSRect(x: 0, y: 0, width: 320, height: 52))
-        container.orientation = .vertical
-        container.alignment = .leading
-        container.spacing = 6
-
-        let input = NSSecureTextField()
-        input.placeholderString = "gsk_..."
-        input.translatesAutoresizingMaskIntoConstraints = false
-        if let existing = GroqTranscriber.apiKey {
-            input.stringValue = existing
-        }
-
-        let linkString = NSMutableAttributedString(string: "→ Get a key at console.groq.com/keys")
-        linkString.addAttributes([
-            .link: Self.groqKeysURL,
-            .foregroundColor: NSColor.linkColor,
-            .font: NSFont.systemFont(ofSize: 11),
-            .cursor: NSCursor.pointingHand,
-        ], range: NSRange(location: 0, length: linkString.length))
-        let link = NSTextField(labelWithAttributedString: linkString)
-        link.allowsEditingTextAttributes = true
-        link.isSelectable = true
-
-        container.addArrangedSubview(input)
-        container.addArrangedSubview(link)
-        NSLayoutConstraint.activate([
-            input.widthAnchor.constraint(equalToConstant: 320),
-        ])
-        container.setFrameSize(NSSize(width: 320, height: 52))
-
-        alert.accessoryView = container
-        alert.window.initialFirstResponder = input
-
-        let response = alert.runModal()
-        if response == .alertFirstButtonReturn {
-            let key = input.stringValue.trimmingCharacters(in: .whitespacesAndNewlines)
-            if !key.isEmpty {
-                GroqTranscriber.apiKey = key
-                Toast.show("API key saved", kind: .success)
+                Toast.show("Add your API key in Settings", kind: .info)
             }
         }
     }

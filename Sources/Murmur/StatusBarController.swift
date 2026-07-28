@@ -1,25 +1,29 @@
 import AppKit
-import ServiceManagement
 import QuartzCore
 import os
 
 private let statusLog = Logger(subsystem: "com.railssquad.murmur", category: "statusbar")
 
+/// Menu-bar presence: recording indicator plus a short menu.
+///
+/// This used to be the app's entire interface, so every setting lived here in
+/// a submenu. Configuration now belongs to the Settings window; what's left is
+/// what you actually want one click away — current status, the last few
+/// transcripts, and a way into the real windows.
 class StatusBarController: NSObject {
     private let statusItem: NSStatusItem
     private let menu = NSMenu()
     private let statusMenuItem: NSMenuItem
-    private var history: [String] = []
+    private var history: [Transcription] = []
 
-    var onSetAPIKey: (() -> Void)?
     var onQuit: (() -> Void)?
     var onShowHelp: (() -> Void)?
     var onHistorySelect: ((String) -> Void)?
-    var onHistoryClear: (() -> Void)?
-    var onSetMouseTrigger: (() -> Void)?
-    var onClearMouseTrigger: (() -> Void)?
+    var onOpenHistory: (() -> Void)?
+    var onOpenSettings: (() -> Void)?
 
-    private var inputDevices: [AudioInputDevice] = []
+    /// How many transcripts the menu shows before deferring to the window.
+    private static let menuHistoryLimit = 5
 
     override init() {
         statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
@@ -72,8 +76,13 @@ class StatusBarController: NSObject {
         statusMenuItem.title = text
     }
 
-    func setHistory(_ items: [String]) {
+    func setHistory(_ items: [Transcription]) {
         history = items
+        rebuildMenu()
+    }
+
+    /// Rebuild the menu to reflect a changed binding made elsewhere.
+    func refreshMenu() {
         rebuildMenu()
     }
 
@@ -84,7 +93,7 @@ class StatusBarController: NSObject {
         menu.addItem(statusMenuItem)
         menu.addItem(.separator())
 
-        let header = NSMenuItem(title: "History", action: nil, keyEquivalent: "")
+        let header = NSMenuItem(title: "Recent", action: nil, keyEquivalent: "")
         header.isEnabled = false
         menu.addItem(header)
 
@@ -93,9 +102,9 @@ class StatusBarController: NSObject {
             empty.isEnabled = false
             menu.addItem(empty)
         } else {
-            for (index, text) in history.enumerated() {
-                let preview = text.prefix(60)
-                let suffix = text.count > 60 ? "…" : ""
+            for (index, entry) in history.prefix(Self.menuHistoryLimit).enumerated() {
+                let preview = entry.text.prefix(60)
+                let suffix = entry.text.count > 60 ? "…" : ""
                 let item = NSMenuItem(
                     title: "  \(preview)\(suffix)",
                     action: #selector(historyItemClicked(_:)),
@@ -103,51 +112,20 @@ class StatusBarController: NSObject {
                 )
                 item.target = self
                 item.tag = index
-                item.toolTip = text
+                item.toolTip = entry.text
                 menu.addItem(item)
             }
-            let clear = NSMenuItem(title: "  Clear History", action: #selector(clearHistoryClicked), keyEquivalent: "")
-            clear.target = self
-            menu.addItem(clear)
         }
 
         menu.addItem(.separator())
 
-        let micItem = NSMenuItem(title: "Microphone", action: nil, keyEquivalent: "")
-        micItem.submenu = buildMicrophoneSubmenu()
-        menu.addItem(micItem)
+        let open = NSMenuItem(title: "Open Murmur", action: #selector(openHistoryClicked), keyEquivalent: "")
+        open.target = self
+        menu.addItem(open)
 
-        let noiseSuppression = NSMenuItem(title: "Noise Suppression", action: #selector(toggleNoiseSuppression), keyEquivalent: "")
-        noiseSuppression.target = self
-        noiseSuppression.state = AudioRecorder.noiseSuppressionEnabled ? .on : .off
-        noiseSuppression.toolTip = "Runs the mic through Apple's voice processing (noise + echo removal). Best for AirPods in noisy places; leave off for a good mic in a quiet room."
-        menu.addItem(noiseSuppression)
-
-        let languageItem = NSMenuItem(title: "Language", action: nil, keyEquivalent: "")
-        languageItem.submenu = buildLanguageSubmenu()
-        menu.addItem(languageItem)
-
-        let mouseItem = NSMenuItem(title: "Mouse Trigger", action: nil, keyEquivalent: "")
-        mouseItem.submenu = buildMouseTriggerSubmenu()
-        menu.addItem(mouseItem)
-
-        let returnAfter = NSMenuItem(title: "Add Enter at End", action: #selector(toggleReturnAfterPaste), keyEquivalent: "")
-        returnAfter.target = self
-        returnAfter.state = TextPaster.pressReturnAfterPaste ? .on : .off
-        menu.addItem(returnAfter)
-
-        let launch = NSMenuItem(title: "Launch at Login", action: #selector(toggleLaunchAtLogin), keyEquivalent: "")
-        launch.target = self
-        if #available(macOS 13.0, *) {
-            launch.state = SMAppService.mainApp.status == .enabled ? .on : .off
-        } else {
-            launch.isHidden = true
-        }
-        menu.addItem(launch)
-
-        let apiKey = NSMenuItem(title: "Set API Key…", action: #selector(apiKeyClicked), keyEquivalent: "k")
-        apiKey.target = self
-        menu.addItem(apiKey)
+        let settings = NSMenuItem(title: "Settings…", action: #selector(openSettingsClicked), keyEquivalent: ",")
+        settings.target = self
+        menu.addItem(settings)
 
         let help = NSMenuItem(title: "How to Use", action: #selector(helpClicked), keyEquivalent: "")
         help.target = self
@@ -160,156 +138,16 @@ class StatusBarController: NSObject {
         menu.addItem(quit)
     }
 
-    private func buildMicrophoneSubmenu() -> NSMenu {
-        let submenu = NSMenu()
-        submenu.autoenablesItems = false
-        inputDevices = AudioDeviceManager.listInputDevices()
-        let selectedUID = AudioDeviceManager.selectedUID
-
-        let auto = NSMenuItem(title: "Automatic (built-in mic)", action: #selector(microphoneSelected(_:)), keyEquivalent: "")
-        auto.target = self
-        auto.tag = -1
-        auto.state = (selectedUID == nil) ? .on : .off
-        auto.toolTip = "Records from the built-in microphone, ignoring whatever headset you're listening on. Bluetooth mics drop to a 24 kHz phone-call codec and transcribe noticeably worse."
-        submenu.addItem(auto)
-
-        if !inputDevices.isEmpty {
-            submenu.addItem(.separator())
-            for (index, device) in inputDevices.enumerated() {
-                let item = NSMenuItem(title: device.name, action: #selector(microphoneSelected(_:)), keyEquivalent: "")
-                item.target = self
-                item.tag = index
-                item.state = (device.uid == selectedUID) ? .on : .off
-                submenu.addItem(item)
-            }
-        }
-
-        if let pinnedUID = selectedUID, !inputDevices.contains(where: { $0.uid == pinnedUID }) {
-            submenu.addItem(.separator())
-            let missing = NSMenuItem(title: "Pinned device not connected", action: nil, keyEquivalent: "")
-            missing.isEnabled = false
-            submenu.addItem(missing)
-        }
-
-        return submenu
-    }
-
-    private func buildLanguageSubmenu() -> NSMenu {
-        let submenu = NSMenu()
-        submenu.autoenablesItems = false
-        let selected = GroqTranscriber.languageCode
-
-        for (index, language) in GroqTranscriber.supportedLanguages.enumerated() {
-            let item = NSMenuItem(title: language.name, action: #selector(languageSelected(_:)), keyEquivalent: "")
-            item.target = self
-            item.tag = index
-            item.state = (language.code == selected) ? .on : .off
-            submenu.addItem(item)
-            if language.code == nil { submenu.addItem(.separator()) }
-        }
-
-        return submenu
-    }
-
-    private func buildMouseTriggerSubmenu() -> NSMenu {
-        let submenu = NSMenu()
-        submenu.autoenablesItems = false
-
-        if let button = KeyMonitor.triggerMouseButton {
-            let current = NSMenuItem(title: "Bound to button \(button)", action: nil, keyEquivalent: "")
-            current.isEnabled = false
-            submenu.addItem(current)
-            submenu.addItem(.separator())
-
-            let rebind = NSMenuItem(title: "Re-bind…", action: #selector(setMouseTriggerClicked), keyEquivalent: "")
-            rebind.target = self
-            submenu.addItem(rebind)
-
-            let clear = NSMenuItem(title: "Clear", action: #selector(clearMouseTriggerClicked), keyEquivalent: "")
-            clear.target = self
-            submenu.addItem(clear)
-        } else {
-            let none = NSMenuItem(title: "Not set", action: nil, keyEquivalent: "")
-            none.isEnabled = false
-            submenu.addItem(none)
-            submenu.addItem(.separator())
-
-            let set = NSMenuItem(title: "Set Mouse Button…", action: #selector(setMouseTriggerClicked), keyEquivalent: "")
-            set.target = self
-            submenu.addItem(set)
-        }
-
-        return submenu
-    }
-
-    /// Rebuild the menu to reflect a changed mouse-trigger binding.
-    func refreshMenu() {
-        rebuildMenu()
-    }
-
     // MARK: - Actions
-
-    @objc private func setMouseTriggerClicked() { onSetMouseTrigger?() }
-    @objc private func clearMouseTriggerClicked() { onClearMouseTrigger?() }
-
-    @objc private func microphoneSelected(_ sender: NSMenuItem) {
-        if sender.tag == -1 {
-            AudioDeviceManager.selectedUID = nil
-        } else if inputDevices.indices.contains(sender.tag) {
-            AudioDeviceManager.selectedUID = inputDevices[sender.tag].uid
-        }
-        rebuildMenu()
-    }
-
-
-    @objc private func languageSelected(_ sender: NSMenuItem) {
-        guard GroqTranscriber.supportedLanguages.indices.contains(sender.tag) else { return }
-        let language = GroqTranscriber.supportedLanguages[sender.tag]
-        GroqTranscriber.languageCode = language.code
-        rebuildMenu()
-        Toast.show("Language: \(language.name)", kind: .success, duration: 1.5)
-    }
 
     @objc private func historyItemClicked(_ sender: NSMenuItem) {
         let index = sender.tag
         guard history.indices.contains(index) else { return }
-        onHistorySelect?(history[index])
+        onHistorySelect?(history[index].text)
     }
 
-    @objc private func clearHistoryClicked() {
-        onHistoryClear?()
-    }
-
-    @objc private func toggleNoiseSuppression() {
-        AudioRecorder.noiseSuppressionEnabled.toggle()
-        if AudioRecorder.noiseSuppressionEnabled {
-            // Forget past failures so devices that couldn't do voice processing
-            // get retried once rather than being written off forever.
-            AudioRecorder.clearVoiceProcessingBlocklist()
-        }
-        rebuildMenu()
-    }
-
-    @objc private func toggleReturnAfterPaste() {
-        TextPaster.pressReturnAfterPaste.toggle()
-        rebuildMenu()
-    }
-
-    @objc private func toggleLaunchAtLogin() {
-        guard #available(macOS 13.0, *) else { return }
-        do {
-            if SMAppService.mainApp.status == .enabled {
-                try SMAppService.mainApp.unregister()
-            } else {
-                try SMAppService.mainApp.register()
-            }
-        } catch {
-            Toast.show("Couldn't update login item: \(error.localizedDescription)", kind: .error)
-        }
-        rebuildMenu()
-    }
-
-    @objc private func apiKeyClicked() { onSetAPIKey?() }
+    @objc private func openHistoryClicked() { onOpenHistory?() }
+    @objc private func openSettingsClicked() { onOpenSettings?() }
     @objc private func helpClicked() { onShowHelp?() }
     @objc private func quitClicked() { onQuit?() }
 
