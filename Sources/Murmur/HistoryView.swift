@@ -7,6 +7,9 @@ struct HistoryView: View {
     @State private var query = ""
     @State private var selection: UUID?
     @State private var confirmingClear = false
+    /// Set for the one selection change an arrow key causes, so walking the
+    /// list doesn't fire the copy that a click does.
+    @State private var movingByKeyboard = false
 
     private var filtered: [Transcription] {
         let trimmed = query.trimmingCharacters(in: .whitespaces)
@@ -21,12 +24,21 @@ struct HistoryView: View {
         return buckets.keys.sorted(by: >).map { ($0, buckets[$0] ?? []) }
     }
 
+    /// The groups flattened back into screen order — what ↑/↓ actually walk,
+    /// since the day headers are presentation only.
+    private var rows: [Transcription] {
+        groups.flatMap(\.entries)
+    }
+
     var body: some View {
         VStack(spacing: 0) {
             SearchHeader(
                 query: $query,
                 canClear: !state.history.isEmpty,
-                clear: { confirmingClear = true }
+                clear: { confirmingClear = true },
+                move: moveSelection(by:),
+                submit: copySelection,
+                cancel: { query = "" }
             )
 
             Group {
@@ -55,9 +67,23 @@ struct HistoryView: View {
             )
         }
         .onChange(of: selection) { id in
+            // Arrowing only highlights — ⏎ is what copies.
+            if movingByKeyboard {
+                movingByKeyboard = false
+                return
+            }
             guard let id, let entry = state.history.first(where: { $0.id == id }) else { return }
             state.copyToPasteboard(entry.text)
             Toast.show("Copied to clipboard", kind: .success, duration: 1.5)
+        }
+        // A narrowed search can strip the highlighted row out from under us, so
+        // start each new query from the top again.
+        .onChange(of: query) { _ in
+            // Only when it would actually change: a no-op assignment never
+            // reaches `onChange`, which would leave the flag armed.
+            guard selection != nil else { return }
+            movingByKeyboard = true
+            selection = nil
         }
         .confirmationDialog(
             "Delete every transcription?",
@@ -72,7 +98,47 @@ struct HistoryView: View {
         .frame(minWidth: 520, minHeight: 380)
     }
 
+    // MARK: - Keyboard navigation
+
+    /// Moves the highlight `delta` rows, clamping at both ends rather than
+    /// wrapping — wrapping from the last hit back to the first reads as a bug
+    /// when you're holding ↓ to scan a long result set.
+    private func moveSelection(by delta: Int) {
+        let ordered = rows
+        guard !ordered.isEmpty else { return }
+
+        let target: UUID
+        if let current = selection.flatMap({ id in ordered.firstIndex { $0.id == id } }) {
+            target = ordered[min(max(current + delta, 0), ordered.count - 1)].id
+        } else {
+            // Nothing highlighted yet: ↓ starts at the top, ↑ at the bottom.
+            target = delta > 0 ? ordered[0].id : ordered[ordered.count - 1].id
+        }
+
+        guard target != selection else { return }
+        movingByKeyboard = true
+        selection = target
+    }
+
+    private func copySelection() {
+        guard let id = selection, let entry = rows.first(where: { $0.id == id }) else { return }
+        state.copyToPasteboard(entry.text)
+        Toast.show("Copied to clipboard", kind: .success, duration: 1.5)
+    }
+
     private var list: some View {
+        ScrollViewReader { proxy in
+            listBody
+                // The caret stays in the search field, so the list never
+                // auto-scrolls to a keyboard-driven selection on its own.
+                .onChange(of: selection) { id in
+                    guard let id else { return }
+                    proxy.scrollTo(id)
+                }
+        }
+    }
+
+    private var listBody: some View {
         List(selection: $selection) {
             ForEach(groups, id: \.day) { group in
                 Section {
@@ -124,8 +190,12 @@ private struct SearchHeader: View {
     @Binding var query: String
     let canClear: Bool
     let clear: () -> Void
+    /// ±1 row, driven by ↓/↑ while the caret stays in the field.
+    let move: (Int) -> Void
+    let submit: () -> Void
+    let cancel: () -> Void
 
-    @FocusState private var focused: Bool
+    @State private var focused = false
 
     var body: some View {
         VStack(spacing: 0) {
@@ -135,10 +205,14 @@ private struct SearchHeader: View {
                         .font(.system(size: 12))
                         .foregroundStyle(.tertiary)
 
-                    TextField("Search", text: $query)
-                        .textFieldStyle(.plain)
-                        .font(.system(size: 13))
-                        .focused($focused)
+                    SearchField(
+                        text: $query,
+                        focused: $focused,
+                        move: move,
+                        submit: submit,
+                        cancel: cancel
+                    )
+                    .frame(maxWidth: .infinity)
 
                     if !query.isEmpty {
                         Button {
@@ -180,6 +254,85 @@ private struct SearchHeader: View {
             .padding(.vertical, 14)
 
             Divider()
+        }
+    }
+}
+
+/// The search field itself, in AppKit.
+///
+/// SwiftUI's `TextField` eats ↑/↓ and never reports them, and `.onKeyPress`
+/// is macOS 14+ while we ship back to 13. An `NSTextField` hands unclaimed
+/// commands to its delegate, so `doCommandBy` can forward the arrows to the
+/// list without the caret ever leaving the field.
+private struct SearchField: NSViewRepresentable {
+    @Binding var text: String
+    @Binding var focused: Bool
+    let move: (Int) -> Void
+    let submit: () -> Void
+    let cancel: () -> Void
+
+    func makeNSView(context: Context) -> NSTextField {
+        let field = NSTextField()
+        field.delegate = context.coordinator
+        field.isBordered = false
+        field.drawsBackground = false
+        field.focusRingType = .none          // SearchHeader draws its own ring
+        field.font = .systemFont(ofSize: 13)
+        field.placeholderString = "Search"
+        field.lineBreakMode = .byTruncatingTail
+        field.cell?.isScrollable = true
+        field.cell?.wraps = false
+        // Let SwiftUI's frame win; the intrinsic width would collapse it.
+        field.setContentHuggingPriority(.defaultLow, for: .horizontal)
+        field.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
+        return field
+    }
+
+    func updateNSView(_ field: NSTextField, context: Context) {
+        context.coordinator.parent = self
+        if field.stringValue != text { field.stringValue = text }
+
+        // Open with the caret already here, so ↑/↓ work without a click first.
+        if !context.coordinator.claimedFocus {
+            context.coordinator.claimedFocus = true
+            DispatchQueue.main.async { field.window?.makeFirstResponder(field) }
+        }
+    }
+
+    func makeCoordinator() -> Coordinator { Coordinator(self) }
+
+    final class Coordinator: NSObject, NSTextFieldDelegate {
+        var parent: SearchField
+        var claimedFocus = false
+
+        init(_ parent: SearchField) { self.parent = parent }
+
+        func controlTextDidChange(_ note: Notification) {
+            guard let field = note.object as? NSTextField else { return }
+            parent.text = field.stringValue
+        }
+
+        func controlTextDidBeginEditing(_ note: Notification) { parent.focused = true }
+        func controlTextDidEndEditing(_ note: Notification) { parent.focused = false }
+
+        func control(
+            _ control: NSControl,
+            textView: NSTextView,
+            doCommandBy selector: Selector
+        ) -> Bool {
+            switch selector {
+            case #selector(NSResponder.moveDown(_:)):
+                parent.move(1)
+            case #selector(NSResponder.moveUp(_:)):
+                parent.move(-1)
+            case #selector(NSResponder.insertNewline(_:)):
+                parent.submit()
+            case #selector(NSResponder.cancelOperation(_:)):
+                parent.cancel()
+            default:
+                return false                 // everything else is normal editing
+            }
+            return true
         }
     }
 }
