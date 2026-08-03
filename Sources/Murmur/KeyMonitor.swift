@@ -6,7 +6,7 @@ class KeyMonitor {
     var onRelease: (() -> Void)?
     /// Fired once per press of the bound mouse button, which toggles rather
     /// than holds.
-    var onToggle: (() -> Void)?
+    var onMouseToggle: (() -> Void)?
     var onStatusChange: ((String) -> Void)?
 
     private var eventTap: CFMachPort?
@@ -167,7 +167,7 @@ class KeyMonitor {
         // talk is unreliable on a mouse click — a normal click's down and up are
         // milliseconds apart — so the mouse trigger toggles instead.
         if type == .otherMouseDown {
-            DispatchQueue.main.async { self.onToggle?() }
+            DispatchQueue.main.async { self.onMouseToggle?() }
         }
         return nil
     }
