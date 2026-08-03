@@ -47,7 +47,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         keyMonitor = KeyMonitor()
         keyMonitor.onPress = { [weak self] in self?.startRecording() }
         keyMonitor.onRelease = { [weak self] in self?.stopRecordingAndTranscribe() }
-        keyMonitor.onMouseToggle = { [weak self] in
+        keyMonitor.onToggle = { [weak self] in
             guard let self = self else { return }
             if self.isRecording {
                 self.stopRecordingAndTranscribe()
